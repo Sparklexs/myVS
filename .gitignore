@@ -1,0 +1,10 @@
+*.[oda]
+*.so
+coverage
+.profile
+*swp
+GPATH
+GRTAGS
+GSYMS
+GTAGS
+/share/*
