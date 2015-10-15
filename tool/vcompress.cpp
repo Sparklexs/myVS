@@ -289,12 +289,12 @@ void do_compress(const std::string& input, int id) {
 	{
 		bool firstSectionFinished = false;
 		uint32_t filesGenerated = 0;
-#pragma omp sections
+#pragma omp parallel sections shared(filesGenerated)
 		{
-
 #pragma omp section
 			{
-				std::cout << "section1: " << omp_get_thread_num() << std::endl;
+//				std::cout << "section1: " << omp_get_thread_num() << std::endl;
+//				std::cout << "\"" << omp_get_num_threads() << "\"" << std::endl;
 				/* Open a input file */
 				uint64_t len = 0;
 				uint32_t *addr = OpenFile(input, &len);
@@ -310,10 +310,10 @@ void do_compress(const std::string& input, int id) {
 				//读取每个倒排链并压缩
 				// note that vec stores one element more
 				//than the number of posting lists.
-#pragma omp parallel for shared(vec)
+#pragma omp parallel for shared(vec) num_threads(8)
 				for (uint32_t i = 0; i < vec.size() - 1; i++) {
-					std::cout << "for loop: " << omp_get_thread_num()
-							<< std::endl;
+					std::cout << "for loop(" << omp_get_thread_num() << "): "
+							<< i << std::endl;
 					uint32_t num = VC_LOAD32(vec.at(i));
 					if (LIKELY(num > NSKIP && num < MAXLEN)) {
 
@@ -371,11 +371,9 @@ void do_compress(const std::string& input, int id) {
 
 #pragma omp section
 			{
-//#pragma omp single
-//				{
 				// now let's merge all the intermediate files together
-				std::cout << "section2: " << omp_get_thread_num() << std::endl;
-				int const MERGE_THRESHOLD = 100;
+//				std::cout << "\"" << omp_get_num_threads() << "\"" << std::endl;
+				int const MERGE_THRESHOLD = 50;
 				uint32_t filesMerged = 0;			//对应于listcount
 				uint32_t numUsedForFileName = 0;			//对应于i
 				uint64_t posInPos = 0;
@@ -383,12 +381,16 @@ void do_compress(const std::string& input, int id) {
 				uint64_t lengthInvalid = 0;
 				uint32_t *cmptmp, *postmp;
 
-				FILE *cmp = fopen(("synthesis" + encoder_suffix[id]).c_str(),
+				FILE *cmp = fopen(
+						("./share/synthesis" + encoder_suffix[id]).c_str(),
 						"w");
-				FILE *pos = fopen(("synthesis" + pos_suffix).c_str(), "w");
+				FILE *pos = fopen(("./share/synthesis" + pos_suffix).c_str(),
+						"w");
 				skip_headerinfo(cmp, pos);
 
 				while (!firstSectionFinished) {
+					std::cout << "section2: " << omp_get_thread_num()
+							<< std::endl;
 					// 每100个文件合并一次
 					if (filesGenerated - filesMerged >= MERGE_THRESHOLD) {
 						for (uint32_t i = 0; i < MERGE_THRESHOLD; i++) {
@@ -430,43 +432,42 @@ void do_compress(const std::string& input, int id) {
 
 						}			//for
 					}			//if
-					sleep(10);			//wait 10 secs...
+					sleep(1);			//wait 10 secs...
 				}			//while
-				if (filesMerged < filesGenerated) {
-					for (; filesMerged < filesGenerated;) {
-						do {
-							sprintf(buffer, "%d", numUsedForFileName++);
-						} while (access(
-								(input + buffer + encoder_suffix[id]).c_str(),
-								R_OK) != 0);
-						cmptmp = OpenFile(
-								(input + buffer + encoder_suffix[id]).c_str(),
-								&lengthInvalid);
-						postmp = OpenFile((input + buffer + pos_suffix).c_str(),
-								&lengthInvalid);
-						if (cmp == NULL || pos == NULL)
-							OUTPUT_AND_DIE(
-									"Exception: can't open output files");
-						//unit for n is BYTE
-						VC_LOAD64(postmp);
-						uint32_t num = VC_LOAD32(postmp);
-						uint32_t base = VC_LOAD32(postmp);
-						uint64_t endpos = VC_LOAD64(postmp);
+//				if (filesMerged < filesGenerated) {
+				for (; filesMerged < filesGenerated;) {
+					do {
+						sprintf(buffer, "%d", numUsedForFileName++);
+					} while (access(
+							(input + buffer + encoder_suffix[id]).c_str(),
+							R_OK) != 0);
+					cmptmp = OpenFile(
+							(input + buffer + encoder_suffix[id]).c_str(),
+							&lengthInvalid);
+					postmp = OpenFile((input + buffer + pos_suffix).c_str(),
+							&lengthInvalid);
+					if (cmp == NULL || pos == NULL)
+						OUTPUT_AND_DIE("Exception: can't open output files");
+					//unit for n is BYTE
+					VC_LOAD64(postmp);
+					uint32_t num = VC_LOAD32(postmp);
+					uint32_t base = VC_LOAD32(postmp);
+					uint64_t endpos = VC_LOAD64(postmp);
 
-						write_pos_entry(num, base, posInPos, pos);
-						//cmp是FILE型指针，不能直接copy
-						//本欲打算使用mmap直接写入文件，但发现新建的文件大小时0KB，
-						//无法映射到用户空间上无奈只好使用fwrite函数继续
-						fwrite(cmptmp, 4, endpos, cmp);
-						//			MEMCPY(cmp->_p, cmptmp, endpos * 4);
+					write_pos_entry(num, base, posInPos, pos);
+					//cmp是FILE型指针，不能直接copy
+					//本欲打算使用mmap直接写入文件，但发现新建的文件大小时0KB，
+					//无法映射到用户空间上无奈只好使用fwrite函数继续
+					fwrite(cmptmp, 4, endpos, cmp);
+					//			MEMCPY(cmp->_p, cmptmp, endpos * 4);
 
-						posInPos += endpos;
+					posInPos += endpos;
 
-						//remove tmp file
-						filesMerged++;
-						remove((input + buffer + encoder_suffix[id]).c_str());
-						remove((input + buffer + pos_suffix).c_str());
-					}
+					//remove tmp file
+					filesMerged++;
+					remove((input + buffer + encoder_suffix[id]).c_str());
+					remove((input + buffer + pos_suffix).c_str());
+//					}
 				}
 
 				write_pos_entry(posInPos, pos);
@@ -474,9 +475,8 @@ void do_compress(const std::string& input, int id) {
 
 				fclose(cmp);
 				fclose(pos);
-//				}					//#gragma omp single
 			}			//#pragma omp section
-		}			//#pragma omp sections
+		}			//#pragma omp parallel sections
 	}
 
 	/****************************************************************/
@@ -712,6 +712,18 @@ void do_decompress(const std::string& input, const std::string& output) {
 //}
 int main(int argc, char **argv) {
 
+#pragma omp parallel num_threads(8)
+	{
+#pragma omp for nowait
+		for (int i = 0; i < 1000; ++i) {
+			std::cout << i << "i" << std::endl;
+		}
+#pragma omp for
+		for (int j = 0; j < 10; ++j) {
+			std::cout << j << "j" << std::endl;
+		}
+	}
+
 	if (parse_command(argc, argv)) {
 		//注意java是大端，而这里面的函数却又都是小端
 		//解压文件输入是vc记录文件，不是压缩文件
@@ -720,7 +732,7 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "For help, type: vcompress -h\n");
 		exit(1);
 	}
-	for (int i = 0; i < 4; ++i) {
+	for (int i = 0; i < 1; ++i) {
 		if (decompress_enabled)
 			do_decompress(input, output);
 		else

@@ -6,6 +6,7 @@ coverage
 GPATH
 GRTAGS
 GSYMS
-.exe
 GTAGS
 /share/*
+*.exe
+*.exe
