@@ -15,6 +15,7 @@
  */
 
 #include <compress/policy/VSEncodingDP.hpp>
+#include <iostream>
 
 namespace integer_encoding {
 namespace internals {
@@ -39,7 +40,7 @@ VSEncodingDP::~VSEncodingDP() throw () {
 }
 
 void VSEncodingDP::computePartition(const std::vector<uint32_t>& seq,
-		std::vector<uint32_t> *parts, uint32_t cost) const {
+		std::vector<uint32_t> *parts, uint32_t fixedCost) const {
 	ASSERT(seq.size() != 0);
 	ASSERT(parts != NULL);
 
@@ -70,12 +71,19 @@ void VSEncodingDP::computePartition(const std::vector<uint32_t>& seq,
 		uint32_t maxB;
 		int64_t j, g, l, mleft;
 		uint64_t ccost;
+		//XXX 1 in 3
+		//		int ind = 0;
 
+// i每前进1，一个元素进入到划分中，内循环开始考虑在之前所有划分代价
+// 已知的情况下，如何把新元素和原来的划分集合形成新的最优划分
+// 注意新划分长度不能超过mxblk_
 		for (uint64_t i = 1; i <= seq.size(); i++) {
 			mleft = (i > mxblk_) ? i - mxblk_ : 0;
 
 			//l表示k取值数组的索引，g与zlens相关
 			for (maxB = 0, l = 0, g = 0, j = i - 1; j >= mleft; j--) {
+				//XXX 2 in 3
+				//ind++;
 				ASSERT(l <= size_);
 				ASSERT(g <= size_);
 
@@ -117,9 +125,10 @@ void VSEncodingDP::computePartition(const std::vector<uint32_t>& seq,
 
 				/* Caluculate costs */
 				if (aligned_)
-					ccost = costs[j] + DIV_ROUNDUP((i - j) * maxB, 32) + cost;
+					ccost = costs[j] + DIV_ROUNDUP((i - j) * maxB, 32)
+							+ fixedCost;
 				else
-					ccost = costs[j] + (i - j) * maxB + cost;
+					ccost = costs[j] + (i - j) * maxB + fixedCost;
 
 				if (sssp[i] == -1)
 					costs[i] = ccost + 1;
@@ -131,8 +140,9 @@ void VSEncodingDP::computePartition(const std::vector<uint32_t>& seq,
 				}
 			}
 		}
+		//XXX 3 in 3
+//		std::cout << "times of loop: " << ind << std::endl;
 	}
-
 	/* Compute number of nodes in the path */
 	uint64_t idx = 0;
 	uint64_t next = seq.size();

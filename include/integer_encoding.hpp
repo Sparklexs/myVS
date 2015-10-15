@@ -39,6 +39,8 @@
 #include <compress/policy/VSEncodingRest.hpp>
 #include <compress/policy/VSEncodingBlocksHybrid.hpp>
 #include <compress/policy/VSEncodingSimple.hpp>
+#include <compress/policy/AFOR/KAFOR.hpp>
+#include <compress/policy/AFOR/AFOR.hpp>
 
 namespace integer_encoding {
 

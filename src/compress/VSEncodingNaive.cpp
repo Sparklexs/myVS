@@ -80,7 +80,7 @@ void VSEncodingNaive::encodeArray(const uint32_t *in, uint64_t len,
 		logs.push_back(VSENAIVE_REMAPLOGS[32 - MSB32(in[i])]);
 	}
 	ASSERT(logs.size() == len);
-#ifdef PARTITIONWITHOP //使用近似划分
+#ifndef PARTITIONWITHOP //使用近似划分
 
 	// 不同于DP版本的(k,b) tuple，这里k和b分开存储
 	optimal_partition op(logs, 64);
@@ -172,7 +172,7 @@ void VSEncodingNaive::decodeArray(const uint32_t *in, uint64_t len,
 	ASSERT_ADDR(in, len);ASSERT_ADDR(out, nvalue);
 
 	uint32_t *oterm = out + nvalue;
-#ifdef PARTITIONWITHOP //使用近似划分
+#ifndef PARTITIONWITHOP //使用近似划分
 
 	//读取Simple16的压缩大小和原始大小
 	uint32_t cmpSize = BYTEORDER_FREE_LOAD32(in);

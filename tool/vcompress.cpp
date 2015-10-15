@@ -20,6 +20,9 @@
 
 #include<iostream>
 #include <errno.h>
+#include <omp.h>
+#include<vector>
+#include <stdlib.h>
 
 using namespace integer_encoding;
 using namespace integer_encoding::internals;
@@ -61,6 +64,8 @@ const std::string encoder_suffix[] = { ".gamma", /* N Gamma */
 ".vsert", /* VSencodingRest */
 ".vseh", /* VSEncodingBlocksHybrid */
 ".vses", /* VSEncodingSimple */
+".kafor", /* KAFOR */
+".afor" /* AFOR */
 };
 
 /* For position of data */
@@ -101,6 +106,8 @@ void show_ids() {
 	fprintf(stderr, "15\tVSEncodingRest\n");
 	fprintf(stderr, "16\tVSEncodingBlocksHybrid\n");
 	fprintf(stderr, "17\tVSEncodingSimple\n");
+	fprintf(stderr, "18\tKAFOR\n");
+	fprintf(stderr, "19\tAFOR\n");
 	fprintf(stderr, "\n");
 
 	exit(1);
@@ -275,6 +282,137 @@ void validate_headerinfo(uint32_t **cmp, uint64_t cmplen, uint32_t **pos,
 }
 
 void do_compress(const std::string& input, int id) {
+
+	{
+		/* Open a input file */
+		uint64_t len = 0;
+		uint32_t *addr = OpenFile(input, &len);
+
+		uint32_t listcount = 0;
+
+		uint32_t *term = addr + (len >> 2);
+		std::vector<uint32_t*> vec;
+
+		while (addr < term) {
+			vec.push_back(addr);
+			uint32_t num = VC_LOAD32(addr);
+			addr += num;
+		}
+		//读取每个倒排链并压缩
+		// note that vec stores one element more than the number of posting lists.
+#pragma omp parallel for shared(vec)
+		for (uint32_t i = 0; i < vec.size() - 1; i++) {
+
+			uint32_t num = VC_LOAD32(vec.at(i));
+			if (LIKELY(num > NSKIP && num < MAXLEN)) {
+
+				char buffer[50];
+				listcount++;
+				sprintf(buffer, "%d", i);
+
+				FILE *cmp = fopen((input + buffer + encoder_suffix[id]).c_str(),
+						"w");
+				FILE *pos = fopen((input + buffer + pos_suffix).c_str(), "w");
+				if (cmp == NULL || pos == NULL)
+					OUTPUT_AND_DIE("Exception: can't open output files");
+
+				//	 Allocate the pre-defined size of memory
+				REGISTER_VECTOR_RAII(uint32_t, list, MAXLEN);
+				REGISTER_VECTOR_RAII(uint32_t, cmp_array, MAXLEN);
+
+				EncodingPtr c = EncodingFactory::create(id);
+
+				//	 Do actual compression
+				uint64_t cmp_pos = 0;
+				uint32_t prev = VC_LOAD32(vec.at(i));
+				uint32_t base = prev;
+
+				// d-gap
+				for (uint32_t j = 0; j < num - 1; j++) {
+					// 这里因为base已经另外存储了，所以num-1
+					uint32_t d = VC_LOAD32(vec.at(i));
+					if (UNLIKELY(d < prev))
+						fprintf(stderr,
+								"List Order Exception: Lists MUST be increasing\n");
+					list[j] = d - prev - 1;
+					prev = d;
+				}
+				write_pos_entry(num, base, cmp_pos, pos);
+
+				uint64_t cmp_size = MAXLEN;
+				c->encodeArray(list, num - 1, cmp_array, &cmp_size);
+				fwrite(cmp_array, 4, cmp_size, cmp);
+				cmp_pos += cmp_size;
+
+				// Write the terminal position for decoding
+				write_pos_entry(cmp_pos, pos);
+
+				fclose(cmp);
+				fclose(pos);
+			} else
+				continue;
+		}
+
+		// now let's merge all the intermediate files together
+
+		uint64_t posInPos = 0;
+		uint32_t numUsedForFileName = 0;
+		uint64_t lengthInvalid = 0;
+		uint32_t *cmptmp, *postmp;
+		FILE *cmp = fopen(("synthesis" + encoder_suffix[id]).c_str(), "w");
+		FILE *pos = fopen(("synthesis" + pos_suffix).c_str(), "w");
+
+		//本欲打算使用mmap直接写入文件，但发现新建的文件大小时0KB，无法映射到用户空间上
+		//无奈只好使用fwrite函数继续
+		//		uint32_t *cmp = OpenFile((input + encoder_suffix[id]).c_str(),
+		//				&lengthInvalid);
+		//		uint32_t* cmpBeginningBackup = cmp;
+
+		//		cmp += 1;
+		skip_headerinfo(cmp, pos);
+//		skip_headerinfo(pos);
+
+		for (uint32_t i = 0; i < listcount; i++) {
+			char buffer[50];
+			do {
+				sprintf(buffer, "%d", numUsedForFileName++);
+			} while (access((input + buffer + encoder_suffix[id]).c_str(),
+			R_OK) != 0);
+			cmptmp = OpenFile((input + buffer + encoder_suffix[id]).c_str(),
+					&lengthInvalid);
+			postmp = OpenFile((input + buffer + pos_suffix).c_str(),
+					&lengthInvalid);
+			if (cmp == NULL || pos == NULL)
+				OUTPUT_AND_DIE("Exception: can't open output files");
+			//unit for n is BYTE
+			VC_LOAD64(postmp);
+			uint32_t num = VC_LOAD32(postmp);
+			uint32_t base = VC_LOAD32(postmp);
+			uint64_t endpos = VC_LOAD64(postmp);
+
+			write_pos_entry(num, base, posInPos, pos);
+			//cmp是FILE型指针，不能直接copy
+			fwrite(cmptmp, 4, endpos, cmp);
+//			MEMCPY(cmp->_p, cmptmp, endpos * 4);
+
+			posInPos += endpos;
+		}
+		write_pos_entry(posInPos, pos);
+		// TODO +1 or +4???
+//		uint64_t cmplen = ((uint64_t) cmp - (uint64_t) cmpBeginningBackup)
+//				<< 2 + 4;
+		write_headerinfo(cmp, pos);
+//		write_headerinfo(pos, cmplen);
+//		BYTEORDER_FREE_STORE32(cmpBeginningBackup, xor128());
+//		write_headerinfo(cmp, pos);
+		fclose(cmp);
+		fclose(pos);
+
+//		//遍历检查元素
+//		for (std::vector<uint32_t*>::iterator it = vec.begin(); it != vec.end();
+//				it++) {
+//		}
+	}
 	/* Open a input file */
 	uint64_t len = 0;
 	uint32_t *addr = OpenFile(input, &len);
@@ -297,11 +435,11 @@ void do_compress(const std::string& input, int id) {
 	/* Do actual compression */
 	uint64_t cmp_pos = 0;
 
-	// 这里addr是文件起始地址，而term应该是结束地址
-	// len（字节个数）右移两位是因为指针是按照uint32_t读取的
+// 这里addr是文件起始地址，而term应该是结束地址
+// len（字节个数）右移两位是因为指针是按照uint32_t读取的
 	uint32_t *term = addr + (len >> 2);
 
-	// 统计值
+// 统计值
 	uint64_t total = 0;
 	double elapsed = 0;
 
@@ -315,7 +453,7 @@ void do_compress(const std::string& input, int id) {
 		uint32_t prev = VC_LOAD32(addr);
 		uint32_t base = prev;
 
-		if (UNLIKELY(num > NSKIP && num < MAXLEN)) {
+		if (LIKELY(num > NSKIP && num < MAXLEN)) {
 			for (uint32_t i = 0; i < num - 1; i++) {
 				// 这里因为base已经另外存储了，所以num-1
 				uint32_t d = VC_LOAD32(addr);
@@ -348,7 +486,6 @@ void do_compress(const std::string& input, int id) {
 			c->encodeArray(list, num - 1, cmp_array, &cmp_size);
 			elapsed += t.elapsed();
 
-
 			/* NOTE: the data in cmp_array are byte-order free */
 			fwrite(cmp_array, 4, cmp_size, cmp);
 			cmp_pos += cmp_size;
@@ -369,15 +506,15 @@ void do_compress(const std::string& input, int id) {
 	fclose(pos);
 
 	/* Show performance results */
-		fprintf(stdout, "Performance Results(ID:%d):\n", encoder_id);
-		fprintf(stdout, "  Total Num Decoded: %llu\n",
-				static_cast<unsigned long long>(total));
-		fprintf(stdout, "  Elapsed: %.2lf\n", elapsed);
-		fprintf(stdout, "  Performance: %.2lfmis\n",
-				(total + 0.0) / (elapsed * 1000000));
-		fprintf(stdout, "  Throughput: %.2lfGiB/s\n",
-				total * 4.0 / (elapsed * 1024 * 1024 * 1024));
-		fprintf(stdout, "  Size: %.2lfbpi\n", ((cmp_pos + 0.0) / total) * 32);
+	fprintf(stdout, "Performance Results(ID:%d):\n", encoder_id);
+	fprintf(stdout, "  Total Num Encoded: %llu\n",
+			static_cast<unsigned long long>(total));
+	fprintf(stdout, "  Elapsed: %.2lf\n", elapsed);
+	fprintf(stdout, "  Performance: %.2lfmis\n",
+			(total + 0.0) / (elapsed * 1000000));
+	fprintf(stdout, "  Throughput: %.2lfGiB/s\n",
+			total * 4.0 / (elapsed * 1024 * 1024 * 1024));
+	fprintf(stdout, "  Size: %.2lfbpi\n", ((cmp_pos + 0.0) / total) * 32);
 }
 
 void do_decompress(const std::string& input, const std::string& output) {
@@ -441,6 +578,7 @@ void do_decompress(const std::string& input, const std::string& output) {
 			fwrite(buf, 8, 1, out);
 
 			if (encoder_id != E_BINARYIPL) {
+				//with d-gap
 				for (uint32_t j = 0; j < num - 1; j++) {
 					uint32_t d = VC_LOAD32(list);
 					prev += d + 1;
@@ -448,6 +586,7 @@ void do_decompress(const std::string& input, const std::string& output) {
 					fwrite(buf, 4, 1, out);
 				}
 			} else {
+				// without d-gap
 				fwrite(list, num - 1, 4, out);
 			}
 		}
@@ -476,12 +615,12 @@ void do_decompress(const std::string& input, const std::string& output) {
 //	const int SEQUENCE_LENGTH = 65536;
 //	const int CODEWORD_LENGTH = 50000;
 //
-//	EncodingPtr ptr = EncodingFactory::create(14);
+//	EncodingPtr ptr = EncodingFactory::create(18);
 ////	ptr =
 ////			EncodingPtr(
 ////					static_cast<internals::EncodingBase *>(new internals::VSEncodingNaive()));
 //
-//	std::cout << "integers to be compressed:" << std::endl;
+////	std::cout << "integers to be compressed:" << std::endl;
 //	uint32_t* const in = (uint32_t*) malloc(SEQUENCE_LENGTH * sizeof(uint32_t));
 //
 //	for (int i = 0; i < SEQUENCE_LENGTH; i++) {
@@ -502,17 +641,23 @@ void do_decompress(const std::string& input, const std::string& output) {
 //	return 0;
 //}
 int main(int argc, char **argv) {
+//	std::cout << omp_get_num_procs() << std::endl;
+//	std::cout << omp_get_num_threads() << std::endl;
+
 	if (parse_command(argc, argv)) {
 		//注意java是大端，而这里面的函数却又都是小端
+		//解压文件输入是vc记录文件，不是压缩文件
 		fprintf(stderr,
 				"vcompress: compressed data not written to a terminal.\n");
 		fprintf(stderr, "For help, type: vcompress -h\n");
 		exit(1);
 	}
-	if (decompress_enabled)
-		do_decompress(input, output);
-	else
-		do_compress(input, encoder_id);
+	for (int i = 0; i < 4; ++i) {
+		if (decompress_enabled)
+			do_decompress(input, output);
+		else
+			do_compress(input, encoder_id);
+	}
 
 	return 0;
 }

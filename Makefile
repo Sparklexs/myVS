@@ -5,7 +5,7 @@ CFLAGS		+=  -g -msse2
 			--param inline-unit-growth=1000 --param max-completely-peel-times=100 -march=nocona
 CFLAGS		+= $(if $(filter 4.4.% 4.5.% 4.6.%,$(CCVERSION)), -std=gnu++0x,)
 CFLAGS		+= $(if $(filter 4.7.%,$(CCVERSION)), -std=gnu++11,)
-CFLAGS		+= -std=c++11 -U__STRICT_ANSI__ #-D__BIG_ENDIAN__#-U__STRICT_ANSI__是为了使用fseeko和fileno自己加的
+CFLAGS		+= -std=c++11 -U__STRICT_ANSI__ -fopenmp#-D__BIG_ENDIAN__#-U__STRICT_ANSI__是为了使用fseeko和fileno自己加的
 WFLAGS		= -Wall -Wextra -Wformat=2 -Wcast-qual -Wcast-align -Wwrite-strings -Wfloat-equal \
 			-Wno-strict-aliasing -Wpointer-arith -Wswitch-enum -Woverloaded-virtual -Weffc++  -Wno-unused
 # WFLAGS		+= -Wconversion
