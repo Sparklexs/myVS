@@ -287,93 +287,29 @@ void do_compress(const std::string& input, int id) {
 	//          compress posting lists using multi-thread           //
 	/****************************************************************/
 	{
-		bool firstSectionFinished = false;
+		bool isGenerationFinished = false;
 		uint32_t filesGenerated = 0;
-#pragma omp parallel sections shared(filesGenerated)
+		/* Open a input file */
+		uint64_t len = 0;
+		uint32_t *addr = OpenFile(input, &len);
+
+		uint32_t *term = addr + (len >> 2);
+		std::vector<uint32_t*> vec;
+
+		while (addr < term) {
+			vec.push_back(addr);
+			uint32_t num = VC_LOAD32(addr);
+			addr += num;
+		}
+		std::cout << "here" << std::endl;
+
+#pragma omp parallel shared(filesGenerated, isGenerationFinished), num_threads(2)
 		{
-#pragma omp section
-			{
-//				std::cout << "section1: " << omp_get_thread_num() << std::endl;
-//				std::cout << "\"" << omp_get_num_threads() << "\"" << std::endl;
-				/* Open a input file */
-				uint64_t len = 0;
-				uint32_t *addr = OpenFile(input, &len);
-
-				uint32_t *term = addr + (len >> 2);
-				std::vector<uint32_t*> vec;
-
-				while (addr < term) {
-					vec.push_back(addr);
-					uint32_t num = VC_LOAD32(addr);
-					addr += num;
-				}
-				//读取每个倒排链并压缩
-				// note that vec stores one element more
-				//than the number of posting lists.
-#pragma omp parallel for shared(vec) num_threads(8)
-				for (uint32_t i = 0; i < vec.size() - 1; i++) {
-					std::cout << "for loop(" << omp_get_thread_num() << "): "
-							<< i << std::endl;
-					uint32_t num = VC_LOAD32(vec.at(i));
-					if (LIKELY(num > NSKIP && num < MAXLEN)) {
-
-						char buffer[50];
-						filesGenerated++;
-						sprintf(buffer, "%d", i);
-
-						FILE *cmp = fopen(
-								(input + buffer + encoder_suffix[id]).c_str(),
-								"w");
-						FILE *pos = fopen((input + buffer + pos_suffix).c_str(),
-								"w");
-						if (cmp == NULL || pos == NULL)
-							OUTPUT_AND_DIE(
-									"Exception: can't open output files");
-
-						//	 Allocate the pre-defined size of memory
-						REGISTER_VECTOR_RAII(uint32_t, list, MAXLEN);
-						REGISTER_VECTOR_RAII(uint32_t, cmp_array, MAXLEN);
-
-						EncodingPtr c = EncodingFactory::create(id);
-
-						//	 Do actual compression
-						uint64_t cmp_pos = 0;
-						uint32_t prev = VC_LOAD32(vec.at(i));
-						uint32_t base = prev;
-
-						// d-gap
-						for (uint32_t j = 0; j < num - 1; j++) {
-							// 这里因为base已经另外存储了，所以num-1
-							uint32_t d = VC_LOAD32(vec.at(i));
-							if (UNLIKELY(d < prev))
-								fprintf(stderr,
-										"List Order Exception: Lists MUST be increasing\n");
-							list[j] = d - prev - 1;
-							prev = d;
-						}
-						write_pos_entry(num, base, cmp_pos, pos);
-
-						uint64_t cmp_size = MAXLEN;
-						c->encodeArray(list, num - 1, cmp_array, &cmp_size);
-						fwrite(cmp_array, 4, cmp_size, cmp);
-						cmp_pos += cmp_size;
-
-						// Write the terminal position for decoding
-						write_pos_entry(cmp_pos, pos);
-
-						fclose(cmp);
-						fclose(pos);
-					} else
-						continue;
-				}
-				firstSectionFinished = true;
-			}			//#pragma omp section
-
-#pragma omp section
+#pragma omp master
 			{
 				// now let's merge all the intermediate files together
 //				std::cout << "\"" << omp_get_num_threads() << "\"" << std::endl;
-				int const MERGE_THRESHOLD = 50;
+				int const MERGE_THRESHOLD = 10;
 				uint32_t filesMerged = 0;			//对应于listcount
 				uint32_t numUsedForFileName = 0;			//对应于i
 				uint64_t posInPos = 0;
@@ -388,7 +324,7 @@ void do_compress(const std::string& input, int id) {
 						"w");
 				skip_headerinfo(cmp, pos);
 
-				while (!firstSectionFinished) {
+				while (!isGenerationFinished) {
 					std::cout << "section2: " << omp_get_thread_num()
 							<< std::endl;
 					// 每100个文件合并一次
@@ -434,7 +370,6 @@ void do_compress(const std::string& input, int id) {
 					}			//if
 					sleep(1);			//wait 10 secs...
 				}			//while
-//				if (filesMerged < filesGenerated) {
 				for (; filesMerged < filesGenerated;) {
 					do {
 						sprintf(buffer, "%d", numUsedForFileName++);
@@ -467,7 +402,6 @@ void do_compress(const std::string& input, int id) {
 					filesMerged++;
 					remove((input + buffer + encoder_suffix[id]).c_str());
 					remove((input + buffer + pos_suffix).c_str());
-//					}
 				}
 
 				write_pos_entry(posInPos, pos);
@@ -475,9 +409,68 @@ void do_compress(const std::string& input, int id) {
 
 				fclose(cmp);
 				fclose(pos);
-			}			//#pragma omp section
-		}			//#pragma omp parallel sections
-	}
+			}			//#pragma omp master
+
+			//读取每个倒排链并压缩
+			// note that vec stores one element more
+			//than the number of posting lists.
+#pragma omp parallel for shared(vec)
+			for (uint32_t i = 0; i < vec.size() - 1; i++) {
+				std::cout << "for loop(" << omp_get_thread_num() << "): " << i
+						<< std::endl;
+				uint32_t num = VC_LOAD32(vec.at(i));
+				if (LIKELY(num > NSKIP && num < MAXLEN)) {
+
+					char buffer[50];
+					filesGenerated++;
+					sprintf(buffer, "%d", i);
+
+					FILE *cmp = fopen(
+							(input + buffer + encoder_suffix[id]).c_str(), "w");
+					FILE *pos = fopen((input + buffer + pos_suffix).c_str(),
+							"w");
+					if (cmp == NULL || pos == NULL)
+						OUTPUT_AND_DIE("Exception: can't open output files");
+
+					//	 Allocate the pre-defined size of memory
+					REGISTER_VECTOR_RAII(uint32_t, list, MAXLEN);
+					REGISTER_VECTOR_RAII(uint32_t, cmp_array, MAXLEN);
+
+					EncodingPtr c = EncodingFactory::create(id);
+
+					//	 Do actual compression
+					uint64_t cmp_pos = 0;
+					uint32_t prev = VC_LOAD32(vec.at(i));
+					uint32_t base = prev;
+
+					// d-gap
+					for (uint32_t j = 0; j < num - 1; j++) {
+						// 这里因为base已经另外存储了，所以num-1
+						uint32_t d = VC_LOAD32(vec.at(i));
+						if (UNLIKELY(d < prev))
+							fprintf(stderr,
+									"List Order Exception: Lists MUST be increasing\n");
+						list[j] = d - prev - 1;
+						prev = d;
+					}
+					write_pos_entry(num, base, cmp_pos, pos);
+
+					uint64_t cmp_size = MAXLEN;
+					c->encodeArray(list, num - 1, cmp_array, &cmp_size);
+					fwrite(cmp_array, 4, cmp_size, cmp);
+					cmp_pos += cmp_size;
+
+					// Write the terminal position for decoding
+					write_pos_entry(cmp_pos, pos);
+
+					fclose(cmp);
+					fclose(pos);
+				} else
+					continue;
+			}
+			isGenerationFinished = true;
+		}			//#pragma omp parallel
+	}			//FIELD
 
 	/****************************************************************/
 //         compress posting lists using single-thread           //
@@ -677,52 +670,62 @@ void do_decompress(const std::string& input, const std::string& output) {
 	fprintf(stdout, "  Size: %.2lfbpi\n", ((cmp_pos + 0.0) / dnum) * 32);
 }
 
+void CodecTest() {
+	const int SEQUENCE_LENGTH = 65536;
+	const int CODEWORD_LENGTH = 50000;
+
+	EncodingPtr ptr = EncodingFactory::create(18);
+	//	ptr =
+	//			EncodingPtr(
+	//					static_cast<internals::EncodingBase *>(new internals::VSEncodingNaive()));
+
+	//	std::cout << "integers to be compressed:" << std::endl;
+	uint32_t* const in = (uint32_t*) malloc(SEQUENCE_LENGTH * sizeof(uint32_t));
+
+	for (int i = 0; i < SEQUENCE_LENGTH; i++) {
+		*(in + i) = i;
+		//		std::cout << *(in + i) << std::endl;
+	}
+	uint32_t*out = (uint32_t*) malloc(CODEWORD_LENGTH * sizeof(uint32_t));
+	uint64_t size = CODEWORD_LENGTH;
+	ptr->encodeArray(in, SEQUENCE_LENGTH, out, &size);
+
+	uint32_t* outcome = (uint32_t*) malloc(SEQUENCE_LENGTH * sizeof(uint32_t));
+	uint64_t size1 = SEQUENCE_LENGTH;
+	std::cout << "Decompression started:" << std::endl;
+	ptr->decodeArray(out, size, outcome, SEQUENCE_LENGTH);
+	for (int i = 0; i < SEQUENCE_LENGTH; i++) {
+		std::cout << outcome[i] << std::endl;
+	}
+}
 }
 ;
 /* namespace: */
 
-//int main(int argc, char **argv) {
-//	const int SEQUENCE_LENGTH = 65536;
-//	const int CODEWORD_LENGTH = 50000;
-//
-//	EncodingPtr ptr = EncodingFactory::create(18);
-////	ptr =
-////			EncodingPtr(
-////					static_cast<internals::EncodingBase *>(new internals::VSEncodingNaive()));
-//
-////	std::cout << "integers to be compressed:" << std::endl;
-//	uint32_t* const in = (uint32_t*) malloc(SEQUENCE_LENGTH * sizeof(uint32_t));
-//
-//	for (int i = 0; i < SEQUENCE_LENGTH; i++) {
-//		*(in + i) = i;
-////		std::cout << *(in + i) << std::endl;
-//	}
-//	uint32_t*out = (uint32_t*) malloc(CODEWORD_LENGTH * sizeof(uint32_t));
-//	uint64_t size = CODEWORD_LENGTH;
-//	ptr->encodeArray(in, SEQUENCE_LENGTH, out, &size);
-//
-//	uint32_t* outcome = (uint32_t*) malloc(SEQUENCE_LENGTH * sizeof(uint32_t));
-//	uint64_t size1 = SEQUENCE_LENGTH;
-//	std::cout << "Decompression started:" << std::endl;
-//	ptr->decodeArray(out, size, outcome, SEQUENCE_LENGTH);
-//	for (int i = 0; i < SEQUENCE_LENGTH; i++) {
-//		std::cout << outcome[i] << std::endl;
-//	}
-//	return 0;
-//}
 int main(int argc, char **argv) {
 
-#pragma omp parallel num_threads(8)
-	{
-#pragma omp for nowait
-		for (int i = 0; i < 1000; ++i) {
-			std::cout << i << "i" << std::endl;
-		}
-#pragma omp for
-		for (int j = 0; j < 10; ++j) {
-			std::cout << j << "j" << std::endl;
-		}
-	}
+	/*#pragma omp parallel num_threads(8)
+	 {
+	 #pragma omp for nowait
+	 for (int i = 0; i < 10; ++i) {
+	 std::cout << i << "i" << std::endl;
+	 }
+	 #pragma omp for
+	 for (int j = 0; j < 10; ++j) {
+	 std::cout << j << "j" << std::endl;
+	 }
+	 }
+	 #pragma omp parallel
+	 {
+	 #pragma omp master
+	 {
+	 std::cout << "master" << std::endl;
+	 }
+	 #pragma omp for
+	 for (int j = 0; j < 10; ++j) {
+	 std::cout << j << "j" << std::endl;
+	 }
+	 }*/
 
 	if (parse_command(argc, argv)) {
 		//注意java是大端，而这里面的函数却又都是小端
