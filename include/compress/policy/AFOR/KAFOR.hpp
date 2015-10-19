@@ -13,6 +13,8 @@
 #include <stdint.h>
 #include <iostream>
 #include <string.h>
+#include<cstdio>
+
 #include <compress/EncodingBase.hpp>
 #include <misc/encoding_internals.hpp>
 #include <compress/policy/AFOR/Compressor.hpp>
@@ -268,6 +270,9 @@ uint32_t KAFOR::decodeAllFrames(T* des, const char* src,
 
 	const uint32_t *srcInt = (const uint32_t *) src;
 	uint32_t byteOffset = 0;	// 0 to 3
+
+	FILE* stat = fopen("./share/kaforstatistics", "a");
+
 	for (uint32_t i = 0; i < numFrames; ++i) {
 		uint8_t frameHeader = (uint8_t) frameHeaderArr[i];
 		uint32_t KAFORUnpackInfoIdx = (((uint32_t) frameHeader) << 2)
@@ -285,7 +290,11 @@ uint32_t KAFOR::decodeAllFrames(T* des, const char* src,
 		srcInt += info.m_wordSkipped;
 		des += info.m_intDecoded;
 		byteOffset = info.m_newOffset >> 3;
+
+		fwrite(&(info.m_intDecoded), 2, 1, stat);
 	}
+	fflush(stat);
+	fclose(stat);
 
 	if (byteOffset > 0)
 		srcInt += 4;
@@ -388,7 +397,7 @@ uint32_t KAFOR::encodeAllFrames(char *des, const T *src,
 	for (uint32_t i = 0; i < numFrames; ++i) {
 		uint8_t frameHeader = (uint8_t) frameHeaderArr[i];
 		uint32_t KAFORPackInfoIdx = (((uint32_t) frameHeader) << 2)
-				+ byteOffset;//id共有96种取值(0~95)，右移两位最大值383(+3)
+				+ byteOffset;	//id共有96种取值(0~95)，右移两位最大值383(+3)
 		if (KAFORPackInfoIdx >= 384)
 			std::cout << "wrong KAFORPackInfoIdx!" << KAFORPackInfoIdx
 					<< std::endl;

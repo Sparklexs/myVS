@@ -1918,74 +1918,74 @@ void VSE_R::encodeArray(const uint32_t *in, uint64_t len, uint32_t *out,
 	uint64_t csize = *nvalue - 2;
 	vnav.encodeArray(logs, len, out + 2, &csize);
 
-	/* Output the information of a 1st section */
-	BYTEORDER_FREE_STORE64(out, csize);
-	out += csize + 2;
-	ntotal = csize + 2;
-	ASSERT(ntotal < *nvalue);
-
-	/*
-	 * hist[i] stores the number of occs of number whose
-	 * log is equal to i.
-	 */
-	uint32_t hist[VSER_LOGS_LEN + 1];
-
-	for (uint32_t i = 0; i <= VSER_LOGS_LEN; i++)
-		hist[i] = 0;
-
-	/* Count the number of occs */
-	uint32_t maxL = 0;
-
-	for (uint32_t i = 0; i < len; i++) {
-		if (logs[i] != 0)
-			hist[logs[i]]++;
-	}
-
-	for (uint32_t i = 0; i <= VSER_LOGS_LEN; i++) {
-		if (hist[i] != 0)
-			maxL = i;
-	}
-
-	/* Write the number of occs resorting to Delta code */
-	F_Delta fd;
-	hist[0] = maxL;
-	csize = *nvalue - ntotal - 2;
-	fd.encodeArray(hist, maxL + 1, out + 2, &csize);
-
-	/* Output the information of a 2nd section */
-	BYTEORDER_FREE_STORE64(out, csize);
-	out += csize + 2;
-	ntotal += csize + 2;
-	ASSERT(ntotal < *nvalue);
-
-	/* Ready to write each integer */
-	BitsWriter *wt[VSER_LOGS_LEN];
-
-	for (uint32_t i = 1; i <= maxL; i++) {
-		if (hist[i] != 0) {
-			wt[i - 1] = new BitsWriter(out, *nvalue - ntotal);
-			// here i means the length of b
-			uint32_t offset = DIV_ROUNDUP(i * hist[i], 32);
-			ntotal += offset, out += offset;
-		}
-
-		ASSERT(ntotal < *nvalue);
-	}
-
-	/* Write the number in blocks depending on their logs */
-	for (uint32_t i = 0; i < len; i++) {
-		if (logs[i] != 0)
-			wt[logs[i] - 1]->write_bits(in[i] + 1, logs[i]);
-	}
-
-	for (uint32_t i = 0; i < maxL; i++) {
-		if (hist[i + 1] != 0) {
-			wt[i]->flush_bits();
-			delete wt[i];
-		}
-	}
-
-	*nvalue = ntotal;
+//	/* Output the information of a 1st section */
+//	BYTEORDER_FREE_STORE64(out, csize);
+//	out += csize + 2;
+//	ntotal = csize + 2;
+//	ASSERT(ntotal < *nvalue);
+//
+//	/*
+//	 * hist[i] stores the number of occs of number whose
+//	 * log is equal to i.
+//	 */
+//	uint32_t hist[VSER_LOGS_LEN + 1];
+//
+//	for (uint32_t i = 0; i <= VSER_LOGS_LEN; i++)
+//		hist[i] = 0;
+//
+//	/* Count the number of occs */
+//	uint32_t maxL = 0;
+//
+//	for (uint32_t i = 0; i < len; i++) {
+//		if (logs[i] != 0)
+//			hist[logs[i]]++;
+//	}
+//
+//	for (uint32_t i = 0; i <= VSER_LOGS_LEN; i++) {
+//		if (hist[i] != 0)
+//			maxL = i;
+//	}
+//
+//	/* Write the number of occs resorting to Delta code */
+//	F_Delta fd;
+//	hist[0] = maxL;
+//	csize = *nvalue - ntotal - 2;
+//	fd.encodeArray(hist, maxL + 1, out + 2, &csize);
+//
+//	/* Output the information of a 2nd section */
+//	BYTEORDER_FREE_STORE64(out, csize);
+//	out += csize + 2;
+//	ntotal += csize + 2;
+//	ASSERT(ntotal < *nvalue);
+//
+//	/* Ready to write each integer */
+//	BitsWriter *wt[VSER_LOGS_LEN];
+//
+//	for (uint32_t i = 1; i <= maxL; i++) {
+//		if (hist[i] != 0) {
+//			wt[i - 1] = new BitsWriter(out, *nvalue - ntotal);
+//			// here i means the length of b
+//			uint32_t offset = DIV_ROUNDUP(i * hist[i], 32);
+//			ntotal += offset, out += offset;
+//		}
+//
+//		ASSERT(ntotal < *nvalue);
+//	}
+//
+//	/* Write the number in blocks depending on their logs */
+//	for (uint32_t i = 0; i < len; i++) {
+//		if (logs[i] != 0)
+//			wt[logs[i] - 1]->write_bits(in[i] + 1, logs[i]);
+//	}
+//
+//	for (uint32_t i = 0; i < maxL; i++) {
+//		if (hist[i + 1] != 0) {
+//			wt[i]->flush_bits();
+//			delete wt[i];
+//		}
+//	}
+//
+//	*nvalue = ntotal;
 }
 
 void VSE_R::decodeArray(const uint32_t *in, uint64_t len, uint32_t *out,

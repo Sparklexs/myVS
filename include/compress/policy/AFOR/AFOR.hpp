@@ -11,6 +11,8 @@
 #include <stdint.h>
 #include <iostream>
 #include <string.h>
+#include<cstdio>
+
 #include <compress/EncodingBase.hpp>
 #include <misc/encoding_internals.hpp>
 #include <compress/policy/AFOR/Compressor.hpp>
@@ -156,6 +158,7 @@ int AFOR::encode(char* des, const T* src, uint32_t encodeNum) const {
 
 	uint32_t compLen = 0;
 	uint32_t encoded = 0;
+
 	while (encoded < encodeNum) {
 		if (encoded + m_windowSize <= encodeNum) {
 			int bestConf = chooseBestConfig(src + encoded, configArr);
@@ -183,6 +186,9 @@ template<typename T>
 int AFOR::decode(T* des, const char* src, uint32_t decodeNum) const {
 	uint32_t byteDecompressed = 0;
 	uint32_t decoded = 0;
+
+	FILE* stat = fopen("./share/aforstatistic", "a");
+
 	while (decoded < decodeNum) {
 		/*if (decoded + m_windowSize <= decodeNum) {
 		 uint32_t rightWindow = decoded + 32;
@@ -198,12 +204,15 @@ int AFOR::decode(T* des, const char* src, uint32_t decodeNum) const {
 					frameByte);
 			byteDecompressed += frameByte;
 			decoded += frameLength;
+			fwrite(&frameLength, 4, 1, stat);
 		} else {
 			byteDecompressed += (uint32_t) VarByte::decode<T>(des + decoded,
 					src + byteDecompressed, decodeNum - decoded);
 			decoded = decodeNum;
 		}
 	}
+	fflush(stat);
+	fclose(stat);
 	return (int) byteDecompressed;
 }
 

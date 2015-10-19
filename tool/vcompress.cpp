@@ -157,7 +157,7 @@ int parse_command(int argc, char **argv) {
 		/* Left arguments MUST be >= 1 */
 		/* getopt函数会将选项及其参数放在argv最左边
 		 * 非选项参数依次放在argv的最后
-		 * 第一个参数是解压的文件
+		 * 第一个参数是解压的文件，注意是vc文件
 		 * 第二个参数（如果有的话）是输出位置
 		 */
 
@@ -286,191 +286,307 @@ void do_compress(const std::string& input, int id) {
 	/****************************************************************/
 	//          compress posting lists using multi-thread           //
 	/****************************************************************/
-	{
-		bool isGenerationFinished = false;
-		uint32_t filesGenerated = 0;
-		/* Open a input file */
-		uint64_t len = 0;
-		uint32_t *addr = OpenFile(input, &len);
-
-		uint32_t *term = addr + (len >> 2);
-		std::vector<uint32_t*> vec;
-
-		while (addr < term) {
-			vec.push_back(addr);
-			uint32_t num = VC_LOAD32(addr);
-			addr += num;
-		}
-		std::cout << "here" << std::endl;
-
-#pragma omp parallel shared(filesGenerated, isGenerationFinished), num_threads(2)
-		{
-#pragma omp master
-			{
-				// now let's merge all the intermediate files together
-//				std::cout << "\"" << omp_get_num_threads() << "\"" << std::endl;
-				int const MERGE_THRESHOLD = 10;
-				uint32_t filesMerged = 0;			//对应于listcount
-				uint32_t numUsedForFileName = 0;			//对应于i
-				uint64_t posInPos = 0;
-				char buffer[50];
-				uint64_t lengthInvalid = 0;
-				uint32_t *cmptmp, *postmp;
-
-				FILE *cmp = fopen(
-						("./share/synthesis" + encoder_suffix[id]).c_str(),
-						"w");
-				FILE *pos = fopen(("./share/synthesis" + pos_suffix).c_str(),
-						"w");
-				skip_headerinfo(cmp, pos);
-
-				while (!isGenerationFinished) {
-					std::cout << "section2: " << omp_get_thread_num()
-							<< std::endl;
-					// 每100个文件合并一次
-					if (filesGenerated - filesMerged >= MERGE_THRESHOLD) {
-						for (uint32_t i = 0; i < MERGE_THRESHOLD; i++) {
-							do {
-								sprintf(buffer, "%d", numUsedForFileName++);
-							} while (access(
-									(input + buffer + encoder_suffix[id]).c_str(),
-									R_OK) != 0);
-							cmptmp =
-									OpenFile(
-											(input + buffer + encoder_suffix[id]).c_str(),
-											&lengthInvalid);
-							postmp = OpenFile(
-									(input + buffer + pos_suffix).c_str(),
-									&lengthInvalid);
-							if (cmp == NULL || pos == NULL)
-								OUTPUT_AND_DIE(
-										"Exception: can't open output files");
-							//unit for n is BYTE
-							VC_LOAD64(postmp);
-							uint32_t num = VC_LOAD32(postmp);
-							uint32_t base = VC_LOAD32(postmp);
-							uint64_t endpos = VC_LOAD64(postmp);
-
-							write_pos_entry(num, base, posInPos, pos);
-							//cmp是FILE型指针，不能直接copy
-							//本欲打算使用mmap直接写入文件，但发现新建的文件大小时0KB，
-							//无法映射到用户空间上无奈只好使用fwrite函数继续
-							fwrite(cmptmp, 4, endpos, cmp);
-							//			MEMCPY(cmp->_p, cmptmp, endpos * 4);
-
-							posInPos += endpos;
-
-							//remove tmp file
-							filesMerged++;
-							remove(
-									(input + buffer + encoder_suffix[id]).c_str());
-							remove((input + buffer + pos_suffix).c_str());
-
-						}			//for
-					}			//if
-					sleep(1);			//wait 10 secs...
-				}			//while
-				for (; filesMerged < filesGenerated;) {
-					do {
-						sprintf(buffer, "%d", numUsedForFileName++);
-					} while (access(
-							(input + buffer + encoder_suffix[id]).c_str(),
-							R_OK) != 0);
-					cmptmp = OpenFile(
-							(input + buffer + encoder_suffix[id]).c_str(),
-							&lengthInvalid);
-					postmp = OpenFile((input + buffer + pos_suffix).c_str(),
-							&lengthInvalid);
-					if (cmp == NULL || pos == NULL)
-						OUTPUT_AND_DIE("Exception: can't open output files");
-					//unit for n is BYTE
-					VC_LOAD64(postmp);
-					uint32_t num = VC_LOAD32(postmp);
-					uint32_t base = VC_LOAD32(postmp);
-					uint64_t endpos = VC_LOAD64(postmp);
-
-					write_pos_entry(num, base, posInPos, pos);
-					//cmp是FILE型指针，不能直接copy
-					//本欲打算使用mmap直接写入文件，但发现新建的文件大小时0KB，
-					//无法映射到用户空间上无奈只好使用fwrite函数继续
-					fwrite(cmptmp, 4, endpos, cmp);
-					//			MEMCPY(cmp->_p, cmptmp, endpos * 4);
-
-					posInPos += endpos;
-
-					//remove tmp file
-					filesMerged++;
-					remove((input + buffer + encoder_suffix[id]).c_str());
-					remove((input + buffer + pos_suffix).c_str());
-				}
-
-				write_pos_entry(posInPos, pos);
-				write_headerinfo(cmp, pos);
-
-				fclose(cmp);
-				fclose(pos);
-			}			//#pragma omp master
-
-			//读取每个倒排链并压缩
-			// note that vec stores one element more
-			//than the number of posting lists.
-#pragma omp parallel for shared(vec)
-			for (uint32_t i = 0; i < vec.size() - 1; i++) {
-				std::cout << "for loop(" << omp_get_thread_num() << "): " << i
-						<< std::endl;
-				uint32_t num = VC_LOAD32(vec.at(i));
-				if (LIKELY(num > NSKIP && num < MAXLEN)) {
-
-					char buffer[50];
-					filesGenerated++;
-					sprintf(buffer, "%d", i);
-
-					FILE *cmp = fopen(
-							(input + buffer + encoder_suffix[id]).c_str(), "w");
-					FILE *pos = fopen((input + buffer + pos_suffix).c_str(),
-							"w");
-					if (cmp == NULL || pos == NULL)
-						OUTPUT_AND_DIE("Exception: can't open output files");
-
-					//	 Allocate the pre-defined size of memory
-					REGISTER_VECTOR_RAII(uint32_t, list, MAXLEN);
-					REGISTER_VECTOR_RAII(uint32_t, cmp_array, MAXLEN);
-
-					EncodingPtr c = EncodingFactory::create(id);
-
-					//	 Do actual compression
-					uint64_t cmp_pos = 0;
-					uint32_t prev = VC_LOAD32(vec.at(i));
-					uint32_t base = prev;
-
-					// d-gap
-					for (uint32_t j = 0; j < num - 1; j++) {
-						// 这里因为base已经另外存储了，所以num-1
-						uint32_t d = VC_LOAD32(vec.at(i));
-						if (UNLIKELY(d < prev))
-							fprintf(stderr,
-									"List Order Exception: Lists MUST be increasing\n");
-						list[j] = d - prev - 1;
-						prev = d;
-					}
-					write_pos_entry(num, base, cmp_pos, pos);
-
-					uint64_t cmp_size = MAXLEN;
-					c->encodeArray(list, num - 1, cmp_array, &cmp_size);
-					fwrite(cmp_array, 4, cmp_size, cmp);
-					cmp_pos += cmp_size;
-
-					// Write the terminal position for decoding
-					write_pos_entry(cmp_pos, pos);
-
-					fclose(cmp);
-					fclose(pos);
-				} else
-					continue;
-			}
-			isGenerationFinished = true;
-		}			//#pragma omp parallel
-	}			//FIELD
+//	{
+//		// 获取每个倒排链的入口，存入vector之中
+//		uint64_t len = 0;
+//		uint32_t *addr = OpenFile(input, &len);
+//		uint32_t *term = addr + (len >> 2);
+//		std::vector<uint32_t*> vec;
+//		while (addr < term) {
+//			vec.push_back(addr);
+//			uint32_t num = VC_LOAD32(addr);
+//			addr += num;
+//		}
+//
+//		// 准备最后的输出文件: .vser, .vc
+//		FILE *cmp = fopen(("./share/synthesis" + encoder_suffix[id]).c_str(),
+//				"w");
+//		FILE *pos = fopen(("./share/synthesis" + pos_suffix).c_str(), "w");
+//		skip_headerinfo(cmp, pos);
+//
+//		// 执行过程中所需要的变量
+//		uint32_t numUsedForFileName = 0;
+//		uint32_t filesMerged = 0;			// 对应于filesGenerated
+//		uint32_t filesGenerated = 0;
+//		uint64_t posInPos = 0;
+//		char buffer[50];
+//		uint64_t lengthInvalid = 0;
+//		uint32_t *cmptmp, *postmp;
+//
+//		uint32_t const MERGE_THRESHOLD = 10000;
+//		uint32_t loopTimes = (vec.size() + MERGE_THRESHOLD - 1)
+//				/ MERGE_THRESHOLD;
+//
+//		for (uint32_t iOutter = 0; iOutter < loopTimes; iOutter++) {
+//			uint32_t currThres =
+//					iOutter == loopTimes - 1 ?
+//							vec.size() - MERGE_THRESHOLD * (loopTimes - 1) :
+//							MERGE_THRESHOLD;
+//#pragma omp parallel for shared(vec)
+//			for (uint32_t i = 0; i < currThres; i++) {
+////				std::cout << "for loop(" << omp_get_thread_num() << "): " << i
+////						<< std::endl;
+//				uint32_t currFileNum = i + iOutter * MERGE_THRESHOLD;
+//				uint32_t num = VC_LOAD32(vec.at(currFileNum));
+//				if (LIKELY(num > NSKIP && num < MAXLEN)) {
+//
+//					char buffer[50];
+//					filesGenerated++;
+//					sprintf(buffer, "%d", currFileNum);
+//
+//					FILE *cmp = fopen(
+//							(input + buffer + encoder_suffix[id]).c_str(), "w");
+//					FILE *pos = fopen((input + buffer + pos_suffix).c_str(),
+//							"w");
+//					if (cmp == NULL || pos == NULL)
+//						OUTPUT_AND_DIE("Exception: can't open output files");
+//
+//					//	 Allocate the pre-defined size of memory
+//					REGISTER_VECTOR_RAII(uint32_t, list, MAXLEN);
+//					REGISTER_VECTOR_RAII(uint32_t, cmp_array, MAXLEN);
+//
+//					EncodingPtr c = EncodingFactory::create(id);
+//
+//					//	 Do actual compression
+//					uint64_t cmp_pos = 0;
+//					uint32_t prev = VC_LOAD32(vec.at(currFileNum));
+//					uint32_t base = prev;
+//
+//					// d-gap
+//					for (uint32_t j = 0; j < num - 1; j++) {
+//						// 这里因为base已经另外存储了，所以num-1
+//						uint32_t d = VC_LOAD32(vec.at(currFileNum));
+//						if (UNLIKELY(d < prev))
+//							fprintf(stderr,
+//									"List Order Exception: Lists MUST be increasing\n");
+//						list[j] = d - prev - 1;
+//						prev = d;
+//					}
+//					write_pos_entry(num, base, cmp_pos, pos);
+//
+//					uint64_t cmp_size = MAXLEN;
+//					c->encodeArray(list, num - 1, cmp_array, &cmp_size);
+//					fwrite(cmp_array, 4, cmp_size, cmp);
+//					cmp_pos += cmp_size;
+//
+//					// Write the terminal position for decoding
+//					write_pos_entry(cmp_pos, pos);
+//
+//					fclose(cmp);
+//					fclose(pos);
+//				} else
+//					continue;
+//			}	//inner FOR loop, generate temporary files
+//
+//			// now let's merge all the intermediate files together
+//			while (filesMerged < filesGenerated) {
+//				do {
+//					sprintf(buffer, "%d", numUsedForFileName++);
+//				} while (access((input + buffer + encoder_suffix[id]).c_str(),
+//				R_OK) != 0);
+//				cmptmp = OpenFile((input + buffer + encoder_suffix[id]).c_str(),
+//						&lengthInvalid);
+//				postmp = OpenFile((input + buffer + pos_suffix).c_str(),
+//						&lengthInvalid);
+//				if (cmp == NULL || pos == NULL)
+//					OUTPUT_AND_DIE("Exception: can't open output files");
+//				//unit for n is BYTE
+//				VC_LOAD64(postmp);
+//				uint32_t num = VC_LOAD32(postmp);
+//				uint32_t base = VC_LOAD32(postmp);
+//				uint64_t endpos = VC_LOAD64(postmp);
+//
+//				write_pos_entry(num, base, posInPos, pos);
+//				//cmp是FILE型指针，不能直接copy
+//				//本欲打算使用mmap直接写入文件，但发现新建的文件大小时0KB，
+//				//无法映射到用户空间上无奈只好使用fwrite函数继续
+//				fwrite(cmptmp, 4, endpos, cmp);
+//				//			MEMCPY(cmp->_p, cmptmp, endpos * 4);
+//
+//				posInPos += endpos;
+//
+//				//remove tmp file
+//				filesMerged++;
+//				remove((input + buffer + encoder_suffix[id]).c_str());
+//				remove((input + buffer + pos_suffix).c_str());
+//			}
+//		}
+//		write_pos_entry(posInPos, pos);
+//		write_headerinfo(cmp, pos);
+//
+//		fclose(cmp);
+//		fclose(pos);
+//
+//		/*
+//		 #pragma omp parallel shared(filesGenerated, isGenerationFinished), num_threads(2)
+//		 {
+//		 #pragma omp master
+//		 {
+//		 // now let's merge all the intermediate files together
+//		 //				std::cout << "\"" << omp_get_num_threads() << "\"" << std::endl;
+//		 uint32_t const MERGE_THRESHOLD = 10;
+//		 uint32_t filesMerged = 0;			//对应于listcount
+//		 uint32_t numUsedForFileName = 0;			//对应于i
+//		 uint64_t posInPos = 0;
+//		 char buffer[50];
+//		 uint64_t lengthInvalid = 0;
+//		 uint32_t *cmptmp, *postmp;
+//
+//		 FILE *cmp = fopen(
+//		 ("./share/synthesis" + encoder_suffix[id]).c_str(),
+//		 "w");
+//		 FILE *pos = fopen(("./share/synthesis" + pos_suffix).c_str(),
+//		 "w");
+//		 skip_headerinfo(cmp, pos);
+//
+//		 while (!isGenerationFinished) {
+//		 std::cout << "section2: " << omp_get_thread_num()
+//		 << std::endl;
+//		 // 每100个文件合并一次
+//		 if (filesGenerated - filesMerged >= MERGE_THRESHOLD) {
+//		 for (uint32_t i = 0; i < MERGE_THRESHOLD; i++) {
+//		 do {
+//		 sprintf(buffer, "%d", numUsedForFileName++);
+//		 } while (access(
+//		 (input + buffer + encoder_suffix[id]).c_str(),
+//		 R_OK) != 0);
+//		 cmptmp =
+//		 OpenFile(
+//		 (input + buffer + encoder_suffix[id]).c_str(),
+//		 &lengthInvalid);
+//		 postmp = OpenFile(
+//		 (input + buffer + pos_suffix).c_str(),
+//		 &lengthInvalid);
+//		 if (cmp == NULL || pos == NULL)
+//		 OUTPUT_AND_DIE(
+//		 "Exception: can't open output files");
+//		 //unit for n is BYTE
+//		 VC_LOAD64(postmp);
+//		 uint32_t num = VC_LOAD32(postmp);
+//		 uint32_t base = VC_LOAD32(postmp);
+//		 uint64_t endpos = VC_LOAD64(postmp);
+//
+//		 write_pos_entry(num, base, posInPos, pos);
+//		 //cmp是FILE型指针，不能直接copy
+//		 //本欲打算使用mmap直接写入文件，但发现新建的文件大小时0KB，
+//		 //无法映射到用户空间上无奈只好使用fwrite函数继续
+//		 fwrite(cmptmp, 4, endpos, cmp);
+//		 //			MEMCPY(cmp->_p, cmptmp, endpos * 4);
+//
+//		 posInPos += endpos;
+//
+//		 //remove tmp file
+//		 filesMerged++;
+//		 remove(
+//		 (input + buffer + encoder_suffix[id]).c_str());
+//		 remove((input + buffer + pos_suffix).c_str());
+//
+//		 }			//for
+//		 }			//if
+//		 sleep(1);			//wait 10 secs...
+//		 }			//while
+//		 for (; filesMerged < filesGenerated;) {
+//		 do {
+//		 sprintf(buffer, "%d", numUsedForFileName++);
+//		 } while (access(
+//		 (input + buffer + encoder_suffix[id]).c_str(),
+//		 R_OK) != 0);
+//		 cmptmp = OpenFile(
+//		 (input + buffer + encoder_suffix[id]).c_str(),
+//		 &lengthInvalid);
+//		 postmp = OpenFile((input + buffer + pos_suffix).c_str(),
+//		 &lengthInvalid);
+//		 if (cmp == NULL || pos == NULL)
+//		 OUTPUT_AND_DIE("Exception: can't open output files");
+//		 //unit for n is BYTE
+//		 VC_LOAD64(postmp);
+//		 uint32_t num = VC_LOAD32(postmp);
+//		 uint32_t base = VC_LOAD32(postmp);
+//		 uint64_t endpos = VC_LOAD64(postmp);
+//
+//		 write_pos_entry(num, base, posInPos, pos);
+//		 //cmp是FILE型指针，不能直接copy
+//		 //本欲打算使用mmap直接写入文件，但发现新建的文件大小时0KB，
+//		 //无法映射到用户空间上无奈只好使用fwrite函数继续
+//		 fwrite(cmptmp, 4, endpos, cmp);
+//		 //			MEMCPY(cmp->_p, cmptmp, endpos * 4);
+//
+//		 posInPos += endpos;
+//
+//		 //remove tmp file
+//		 filesMerged++;
+//		 remove((input + buffer + encoder_suffix[id]).c_str());
+//		 remove((input + buffer + pos_suffix).c_str());
+//		 }
+//
+//		 write_pos_entry(posInPos, pos);
+//		 write_headerinfo(cmp, pos);
+//
+//		 fclose(cmp);
+//		 fclose(pos);
+//		 }			//#pragma omp master
+//
+//		 //读取每个倒排链并压缩
+//		 // note that vec stores one element more
+//		 //than the number of posting lists.
+//		 #pragma omp parallel for shared(vec)
+//		 for (uint32_t i = 0; i < vec.size(); i++) {
+//		 std::cout << "for loop(" << omp_get_thread_num() << "): " << i
+//		 << std::endl;
+//		 uint32_t num = VC_LOAD32(vec.at(i));
+//		 if (LIKELY(num > NSKIP && num < MAXLEN)) {
+//
+//		 char buffer[50];
+//		 filesGenerated++;
+//		 sprintf(buffer, "%d", i);
+//
+//		 FILE *cmp = fopen(
+//		 (input + buffer + encoder_suffix[id]).c_str(), "w");
+//		 FILE *pos = fopen((input + buffer + pos_suffix).c_str(),
+//		 "w");
+//		 if (cmp == NULL || pos == NULL)
+//		 OUTPUT_AND_DIE("Exception: can't open output files");
+//
+//		 //	 Allocate the pre-defined size of memory
+//		 REGISTER_VECTOR_RAII(uint32_t, list, MAXLEN);
+//		 REGISTER_VECTOR_RAII(uint32_t, cmp_array, MAXLEN);
+//
+//		 EncodingPtr c = EncodingFactory::create(id);
+//
+//		 //	 Do actual compression
+//		 uint64_t cmp_pos = 0;
+//		 uint32_t prev = VC_LOAD32(vec.at(i));
+//		 uint32_t base = prev;
+//
+//		 // d-gap
+//		 for (uint32_t j = 0; j < num - 1; j++) {
+//		 // 这里因为base已经另外存储了，所以num-1
+//		 uint32_t d = VC_LOAD32(vec.at(i));
+//		 if (UNLIKELY(d < prev))
+//		 fprintf(stderr,
+//		 "List Order Exception: Lists MUST be increasing\n");
+//		 list[j] = d - prev - 1;
+//		 prev = d;
+//		 }
+//		 write_pos_entry(num, base, cmp_pos, pos);
+//
+//		 uint64_t cmp_size = MAXLEN;
+//		 c->encodeArray(list, num - 1, cmp_array, &cmp_size);
+//		 fwrite(cmp_array, 4, cmp_size, cmp);
+//		 cmp_pos += cmp_size;
+//
+//		 // Write the terminal position for decoding
+//		 write_pos_entry(cmp_pos, pos);
+//
+//		 fclose(cmp);
+//		 fclose(pos);
+//		 } else
+//		 continue;
+//		 }
+//		 isGenerationFinished = true;
+//		 }			//#pragma omp parallel
+//		 */
+//	}			//FIELD
 
 	/****************************************************************/
 //         compress posting lists using single-thread           //
@@ -675,11 +791,11 @@ void CodecTest() {
 	const int CODEWORD_LENGTH = 50000;
 
 	EncodingPtr ptr = EncodingFactory::create(18);
-	//	ptr =
-	//			EncodingPtr(
-	//					static_cast<internals::EncodingBase *>(new internals::VSEncodingNaive()));
+//	ptr =
+//			EncodingPtr(
+//					static_cast<internals::EncodingBase *>(new internals::VSEncodingNaive()));
 
-	//	std::cout << "integers to be compressed:" << std::endl;
+//	std::cout << "integers to be compressed:" << std::endl;
 	uint32_t* const in = (uint32_t*) malloc(SEQUENCE_LENGTH * sizeof(uint32_t));
 
 	for (int i = 0; i < SEQUENCE_LENGTH; i++) {

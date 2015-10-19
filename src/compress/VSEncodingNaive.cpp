@@ -80,7 +80,7 @@ void VSEncodingNaive::encodeArray(const uint32_t *in, uint64_t len,
 		logs.push_back(VSENAIVE_REMAPLOGS[32 - MSB32(in[i])]);
 	}
 	ASSERT(logs.size() == len);
-#ifndef PARTITIONWITHOP //使用近似划分
+#ifdef PARTITIONWITHOP //使用近似划分
 
 	// 不同于DP版本的(k,b) tuple，这里k和b分开存储
 	optimal_partition op(logs, 64);
@@ -115,7 +115,7 @@ void VSEncodingNaive::encodeArray(const uint32_t *in, uint64_t len,
 		wt.write_bits(VSENAIVE_CODELOGS[bParts[i]], VSENAIVE_LOGLOG);
 		/* Write integers */
 		for (uint64_t j = parts[i]; j < parts[i + 1]; j++)
-			wt.write_bits(in[j], bParts[i]);
+		wt.write_bits(in[j], bParts[i]);
 	}
 
 	wt.flush_bits();
@@ -141,7 +141,7 @@ void VSEncodingNaive::encodeArray(const uint32_t *in, uint64_t len,
 
 		for (auto j = parts[i]; j < parts[i + 1]; j++) {
 			if (maxB < logs[j])
-			maxB = logs[j];
+				maxB = logs[j];
 		}
 
 		/* Write the value of B and K */
@@ -150,7 +150,7 @@ void VSEncodingNaive::encodeArray(const uint32_t *in, uint64_t len,
 				VSENAIVE_LOGLEN);
 		/* Write integers */
 		for (uint64_t j = parts[i]; j < parts[i + 1]; j++)
-		wt.write_bits(in[j], maxB);
+			wt.write_bits(in[j], maxB);
 	}
 
 	wt.flush_bits();
@@ -172,7 +172,7 @@ void VSEncodingNaive::decodeArray(const uint32_t *in, uint64_t len,
 	ASSERT_ADDR(in, len);ASSERT_ADDR(out, nvalue);
 
 	uint32_t *oterm = out + nvalue;
-#ifndef PARTITIONWITHOP //使用近似划分
+#ifdef PARTITIONWITHOP //使用近似划分
 
 	//读取Simple16的压缩大小和原始大小
 	uint32_t cmpSize = BYTEORDER_FREE_LOAD32(in);
@@ -186,6 +186,10 @@ void VSEncodingNaive::decodeArray(const uint32_t *in, uint64_t len,
 //	uint32_t Ks[leng];
 	uint32_t* Ks = (uint32_t*) malloc(leng * 4);
 	simp.decodeArray(in + 2, cmpSize, Ks, nvalue);
+	FILE* stat = fopen("./share/vserOPstatistics", "a");
+	fwrite(Ks, 4, leng, stat);//每个分块长度
+	fflush(stat);
+	fclose(stat);
 //
 //	memcpy(Ks, out, leng * 4);
 	in += cmpSize + 2;
@@ -206,16 +210,21 @@ void VSEncodingNaive::decodeArray(const uint32_t *in, uint64_t len,
 #else
 
 	BitsReader rd(in, len);
+	FILE* stat = fopen("./share/vserDPstatistics", "a");
+
 	while (LIKELY(out < oterm)) {
 		uint32_t B = VSENAIVE_LOGS[rd.read_bits(VSENAIVE_LOGLOG)];
 		uint32_t K = VSENAIVE_LENS[rd.read_bits(VSENAIVE_LOGLEN)];
 
+		fwrite(&K, 4, 1, stat);
 		for (uint32_t i = 0; i < K; i++) {
 			out[i] = (B != 0) ? rd.read_bits(B) : 0;
 //		printf("out[%d]:%d\cmpSize",i,out[i]);
 		}
 		out += K;
 	}
+	fflush(stat);
+	fclose(stat);
 #endif
 }
 
