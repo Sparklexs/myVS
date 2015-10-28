@@ -587,9 +587,8 @@ void do_compress(const std::string& input, int id) {
 //		 }			//#pragma omp parallel
 //		 */
 //	}			//FIELD
-
 	/****************************************************************/
-//         compress posting lists using single-thread           //
+	//         compress posting lists using single-thread           //
 	/****************************************************************/
 
 	/* Open a input file */
@@ -636,9 +635,11 @@ void do_compress(const std::string& input, int id) {
 			for (uint32_t i = 0; i < num - 1; i++) {
 				// 这里因为base已经另外存储了，所以num-1
 				uint32_t d = VC_LOAD32(addr);
-				if (UNLIKELY(d < prev))
+				if (UNLIKELY(d < prev)) {
 					fprintf(stderr,
 							"List Order Exception: Lists MUST be increasing\n");
+					exit(1);
+				}
 
 				//目前只有IPC不用d-gap
 				if (id != E_BINARYIPL)
@@ -677,7 +678,6 @@ void do_compress(const std::string& input, int id) {
 	LOOP_END:
 	/* Write the terminal position for decoding */
 	write_pos_entry(cmp_pos, pos);
-
 	/* Fill the header */
 	write_headerinfo(cmp, pos);
 
@@ -776,7 +776,7 @@ void do_decompress(const std::string& input, const std::string& output) {
 
 	/* Show performance results */
 	fprintf(stdout, "Performance Results(ID:%d):\n", encoder_id);
-	fprintf(stdout, "  Total Num Compressed: %llu\n",
+	fprintf(stdout, "  Total Num Decoded: %llu\n",
 			static_cast<unsigned long long>(dnum));
 	fprintf(stdout, "  Elapsed: %.2lf\n", elapsed);
 	fprintf(stdout, "  Performance: %.2lfmis\n",
@@ -842,10 +842,10 @@ int main(int argc, char **argv) {
 	 std::cout << j << "j" << std::endl;
 	 }
 	 }*/
-
 	if (parse_command(argc, argv)) {
 		//注意java是大端，而这里面的函数却又都是小端
 		//解压文件输入是vc记录文件，不是压缩文件
+
 		fprintf(stderr,
 				"vcompress: compressed data not written to a terminal.\n");
 		fprintf(stderr, "For help, type: vcompress -h\n");

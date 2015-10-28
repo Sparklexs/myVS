@@ -16,6 +16,8 @@
 
 #include <compress/policy/VSEncodingDP.hpp>
 #include <iostream>
+#include <cstdio>
+#include<unistd.h>
 
 namespace integer_encoding {
 namespace internals {
@@ -59,6 +61,7 @@ void VSEncodingDP::computePartition(const std::vector<uint32_t>& seq,
 	ASSERT(sssp.size() == seq.size() + 1);
 	ASSERT(costs.size() == seq.size() + 1);
 
+	FILE* stat = fopen("./share/dploops", "a");
 	{
 		/*
 		 * NOTE: This loop computes the cost of the optimal
@@ -72,7 +75,7 @@ void VSEncodingDP::computePartition(const std::vector<uint32_t>& seq,
 		int64_t j, g, l, mleft;
 		uint64_t ccost;
 		//XXX 1 in 3
-		//		int ind = 0;
+		int ind = 0;
 
 // i每前进1，一个元素进入到划分中，内循环开始考虑在之前所有划分代价
 // 已知的情况下，如何把新元素和原来的划分集合形成新的最优划分
@@ -83,7 +86,7 @@ void VSEncodingDP::computePartition(const std::vector<uint32_t>& seq,
 			//l表示k取值数组的索引，g与zlens相关
 			for (maxB = 0, l = 0, g = 0, j = i - 1; j >= mleft; j--) {
 				//XXX 2 in 3
-				//ind++;
+				ind++;
 				ASSERT(l <= size_);
 				ASSERT(g <= size_);
 
@@ -142,6 +145,9 @@ void VSEncodingDP::computePartition(const std::vector<uint32_t>& seq,
 		}
 		//XXX 3 in 3
 //		std::cout << "times of loop: " << ind << std::endl;
+		fwrite(&ind, 4, 1, stat);
+		fflush(stat);
+		fclose(stat);
 	}
 	/* Compute number of nodes in the path */
 	uint64_t idx = 0;

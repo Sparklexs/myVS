@@ -86,12 +86,12 @@ void VSEncodingNaive::encodeArray(const uint32_t *in, uint64_t len,
 	optimal_partition op(logs, 64);
 	std::vector<uint64_t> parts = op.partition;
 	std::vector<uint32_t> bParts = op.Bs;
-//	for (int i = 0; i < op.Bs.size(); i++) {
-//		std::cout << parts[i] << std::endl;
-//		std::cout << op.Ks[i] << std::endl;
-//		std::cout << bParts[i] << std::endl;
-//	}
-//	std::cout << parts[parts.size() - 1] << std::endl;
+	/*	for (int i = 0; i < op.Bs.size(); i++) {
+	 std::cout << parts[i] << std::endl;
+	 std::cout << op.Ks[i] << std::endl;
+	 std::cout << bParts[i] << std::endl;
+	 }
+	 std::cout << parts[parts.size() - 1] << std::endl;*/
 	uint64_t csize = *nvalue - 2;
 
 	// 使用Simple16来压缩所有的K值
@@ -102,11 +102,11 @@ void VSEncodingNaive::encodeArray(const uint32_t *in, uint64_t len,
 	//分别Simple16的存储压缩大小和原始大小
 	BYTEORDER_FREE_STORE32(out, csize);
 	BYTEORDER_FREE_STORE32(out + 1, op.Ks.size());
-//	for (int i = 0; i < csize + 2; i++) {
-//		std::cout << out[i] << std::endl;
-//	}
+	/*	for (int i = 0; i < csize + 2; i++) {
+	 std::cout << out[i] << std::endl;
+	 }*/
 	out += csize + 2;
-//	std::cout << out[0] << std::endl;
+	/*	std::cout << out[0] << std::endl;*/
 	BitsWriter wt(out, *nvalue - csize - 2);
 	uint64_t num = parts.size() - 1;
 
@@ -115,7 +115,7 @@ void VSEncodingNaive::encodeArray(const uint32_t *in, uint64_t len,
 		wt.write_bits(VSENAIVE_CODELOGS[bParts[i]], VSENAIVE_LOGLOG);
 		/* Write integers */
 		for (uint64_t j = parts[i]; j < parts[i + 1]; j++)
-		wt.write_bits(in[j], bParts[i]);
+			wt.write_bits(in[j], bParts[i]);
 	}
 
 	wt.flush_bits();
@@ -136,12 +136,12 @@ void VSEncodingNaive::encodeArray(const uint32_t *in, uint64_t len,
 	uint64_t num = parts.size() - 1;
 	for (uint64_t i = 0; i < num; i++) {
 		/* Compute max B in the block */
-		// 在每个block中计算出所需要的b的值
+		/*在每个block中计算出所需要的b的值*/
 		uint32_t maxB = 0;
 
 		for (auto j = parts[i]; j < parts[i + 1]; j++) {
 			if (maxB < logs[j])
-				maxB = logs[j];
+			maxB = logs[j];
 		}
 
 		/* Write the value of B and K */
@@ -150,7 +150,7 @@ void VSEncodingNaive::encodeArray(const uint32_t *in, uint64_t len,
 				VSENAIVE_LOGLEN);
 		/* Write integers */
 		for (uint64_t j = parts[i]; j < parts[i + 1]; j++)
-			wt.write_bits(in[j], maxB);
+		wt.write_bits(in[j], maxB);
 	}
 
 	wt.flush_bits();

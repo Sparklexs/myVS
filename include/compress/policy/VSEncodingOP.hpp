@@ -12,6 +12,9 @@
 #include <algorithm>
 #include <iterator>
 #include <iostream>
+#include <cstdio>
+#include <unistd.h>
+#include <string>
 
 namespace integer_encoding {
 namespace internals {
@@ -75,6 +78,8 @@ struct optimal_partition {
 	optimal_partition(const std::vector<element_t>& seq,
 			cost_t fixedCost = 64) {
 
+		FILE* stat = fopen("./share/oploops", "a");
+
 		ASSERT(seq.size() != 0);
 
 		//所有元素均使用32bit表示
@@ -99,7 +104,7 @@ struct optimal_partition {
 		std::vector<posIndex_t> path(seq.size() + 1, 0);
 		std::vector<element_t> bPath(seq.size() + 1, 0);
 		//XXX 1 in 3
-//		int ind = 0;
+		int ind = 0;
 
 		bool firsttime;
 		uint32_t firsttimeB = 0;
@@ -125,7 +130,7 @@ struct optimal_partition {
 
 				while (true) {
 					//XXX 2 in 3
-//					ind++;
+					ind++;
 					maxB = maxB > window.end_p ? maxB : window.end_p;
 					window_cost = window.size() * maxB;
 					if (min_cost[i] + window_cost < min_cost[window.end]) {
@@ -150,10 +155,13 @@ struct optimal_partition {
 				window.advance_start();
 			}
 		}
-//		for (int i = 0; i < bPath.size(); i++)
-//			std::cout <<i<<":"<< bPath[i] << std::endl;
+		/* for (int i = 0; i < bPath.size(); i++)
+		 std::cout <<i<<":"<< bPath[i] << std::endl;*/
 		//XXX 3 in 3
-//		std::cout << "times of loop: " << ind << std::endl;
+		//		std::cout << "times of loop: " << ind << std::endl;
+		fwrite(&ind, 4, 1, stat);
+		fflush(stat);
+		fclose(stat);
 
 		posIndex_t curr_pos = seq.size();
 		posIndex_t last_pos = curr_pos;
